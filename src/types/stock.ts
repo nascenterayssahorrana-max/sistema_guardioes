@@ -100,3 +100,29 @@ export interface StockSummaryMetrics {
   totalMonthlyEntriesValue: number;
   totalMonthlyExitsValue: number;
 }
+
+export interface StockFinancialTransaction {
+  id: string;
+  type: 'DESPESA' | 'RECEITA';
+  category: string; // ex: Compra de estoque
+  description: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  supplier?: string;
+  paymentType: 'A_VISTA' | 'A_PRAZO';
+  status: 'PAGO' | 'A_PAGAR';
+  dueDate?: string;
+  movementId?: string;
+  createdAt: string;
+}
+
+export interface StockPermissions {
+  viewStock: boolean;
+  createProduct: boolean;
+  editProduct: boolean;
+  registerEntry: boolean;
+  registerExit: boolean;
+  adjustStock: boolean;
+  viewMovements: boolean;
+  deactivateProduct: boolean;
+}
