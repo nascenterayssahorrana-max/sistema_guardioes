@@ -1,0 +1,6 @@
+{
+  "name": "Sistema Financeiro Guardiões da Lasanha",
+  "description": "Sistema integrado de gestão financeira, controle de custos industriais, análise CVL (Ponto de Equilíbrio), gestão de perdas NOLA e precificação B2C/B2B para fábrica de massas congeladas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
