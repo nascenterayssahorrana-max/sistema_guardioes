@@ -46,22 +46,35 @@ interface NavbarProps {
   onOpenBackupModal: () => void;
 }
 
-const navItems: { id: TabType; label: string; icon: React.ElementType; permission?: Permission }[] = [
-  { id: 'cockpit', label: 'Visão geral', icon: LayoutDashboard, permission:'cockpit.view' },
-  { id: 'pricing', label: 'Custos e precificação', icon: Calculator, permission:'costs.view' },
-  { id: 'products', label: 'Produtos', icon: PackagePlus, permission:'products.view' },
-  { id: 'inventory', label: 'Estoque', icon: Boxes, permission:'inventory.view' },
-  { id: 'users', label: 'Usuários e permissões', icon: Building2, permission:'users.manage' },
-  { id: 'analysis', label: 'Análise gerencial', icon: TrendingUp, permission:'cockpit.view' },
-  { id: 'reports', label: 'Relatórios gerenciais', icon: FileText, permission:'cockpit.view' },
-  { id: 'dre', label: 'DRE gerencial', icon: FileText, permission:'dre.view' },
-  { id: 'breakeven', label: 'Ponto de equilíbrio', icon: TrendingUp, permission:'cvl.view' },
-  { id: 'fixed-costs', label: 'Custos fixos e metas', icon: Building2, permission:'fixedCosts.view' },
-  { id: 'sales', label: 'Vendas e canais', icon: ShoppingCart, permission:'sales.view' },
-  { id: 'nola', label: 'Perdas', icon: AlertTriangle, permission:'losses.view' },
-  { id: 'simulator', label: 'Simulador “E se?”', icon: SlidersHorizontal, permission:'simulator.use' },
-  { id: 'guide', label: 'Guia e glossário', icon: BookOpen },
+type NavigationItem = { id: TabType; label: string; icon: React.ElementType; permission?: Permission };
+
+const navigationSections: { label?: string; items: NavigationItem[] }[] = [
+  { items: [{ id: 'cockpit', label: 'Visão geral', icon: LayoutDashboard, permission: 'cockpit.view' }] },
+  {
+    label: 'Gestão e relatórios',
+    items: [
+      { id: 'analysis', label: 'Análise gerencial', icon: TrendingUp, permission: 'cockpit.view' },
+      { id: 'reports', label: 'Relatórios gerenciais', icon: FileText, permission: 'cockpit.view' },
+      { id: 'dre', label: 'DRE gerencial', icon: FileText, permission: 'dre.view' },
+    ],
+  },
+  {
+    items: [
+      { id: 'pricing', label: 'Custos e precificação', icon: Calculator, permission: 'costs.view' },
+      { id: 'breakeven', label: 'Ponto de equilíbrio', icon: TrendingUp, permission: 'cvl.view' },
+      { id: 'inventory', label: 'Estoque', icon: Boxes, permission: 'inventory.view' },
+      { id: 'fixed-costs', label: 'Custos fixos e metas', icon: Building2, permission: 'fixedCosts.view' },
+      { id: 'sales', label: 'Vendas e canais', icon: ShoppingCart, permission: 'sales.view' },
+      { id: 'nola', label: 'Perdas', icon: AlertTriangle, permission: 'losses.view' },
+      { id: 'simulator', label: 'E se?', icon: SlidersHorizontal, permission: 'simulator.use' },
+      { id: 'products', label: 'Produtos', icon: PackagePlus, permission: 'products.view' },
+      { id: 'guide', label: 'Guia e glossário', icon: BookOpen },
+      { id: 'users', label: 'Usuários e permissões', icon: Building2, permission: 'users.manage' },
+    ],
+  },
 ];
+
+const navigationItems = navigationSections.flatMap((section) => section.items);
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
@@ -107,20 +120,28 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="Navegação principal">
           <p className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[0.16em] text-neutral-500">Módulos</p>
-          {navItems.filter(({permission})=>!permission||can(permission)).map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
-                activeTab === id
-                  ? 'border border-[#B6EB66] bg-[#9DDD25] text-[#10211B]'
-                  : 'border border-transparent text-white/75 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              <Icon className="h-[18px] w-[18px] shrink-0" />
-              <span>{label}</span>
-            </button>
-          ))}
+          {navigationSections.map((section, sectionIndex) => {
+            const items = section.items.filter(({ permission }) => !permission || can(permission));
+            if (items.length === 0) return null;
+
+            return <div key={section.label ?? `section-${sectionIndex}`} className={section.label ? 'mt-2 rounded-xl border border-white/10 bg-white/5 p-1.5' : ''}>
+              {section.label && <p className="px-2.5 pb-1.5 pt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white/50">{section.label}</p>}
+              {items.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                    activeTab === id
+                      ? 'border border-[#B6EB66] bg-[#9DDD25] text-[#10211B]'
+                      : 'border border-transparent text-white/75 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  <Icon className="h-[18px] w-[18px] shrink-0" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>;
+          })}
         </nav>
 
         <div className="space-y-2 border-t border-white/10 p-4">
@@ -157,7 +178,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
         <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-          {navItems.filter(({ permission }) => !permission || can(permission)).map(({ id, label, icon: Icon }) => (
+          {navigationItems.filter(({ permission }) => !permission || can(permission)).map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setActiveTab(id)} className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium ${activeTab === id ? 'bg-[#9DDD25] text-[#10211B]' : 'bg-white/10 text-white/80'}`}>
               <Icon className="h-4 w-4" /> {label}
             </button>
