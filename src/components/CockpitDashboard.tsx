@@ -1,574 +1,113 @@
 import React from 'react';
-import {
-  DollarSign,
-  TrendingUp,
-  Percent,
-  AlertOctagon,
-  ArrowUpRight,
-  ArrowDownRight,
-  ShieldCheck,
-  Target,
-  Sparkles,
-  ChevronRight,
-  PlusCircle,
-  HelpCircle,
-  BarChart3,
-  Layers,
-  PieChart as PieIcon,
-  Flame,
-  CheckCircle2,
-} from 'lucide-react';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, PieChart, Pie, Legend } from 'recharts';
+import { AlertOctagon, AlertTriangle, BarChart3, CheckCircle2, ChevronRight, CircleAlert, CircleDollarSign, DollarSign, HelpCircle, Landmark, Percent, PlusCircle, ShieldCheck, Sparkles, TrendingDown, TrendingUp } from 'lucide-react';
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useFinance } from '../context/FinanceContext';
-import { formatCurrency, formatPercent, formatNumber } from '../utils/formatters';
+import { formatCurrency, formatDecimal, formatNumber, formatPercent } from '../utils/formatters';
 import { TabType } from './Navbar';
+import { DEMO_DATA_CONTEXT } from '../data';
+import { buildOperationalPriorities, getCommercialHighlights } from '../utils/operationalPriorities';
 
-interface CockpitDashboardProps {
-  onNavigate: (tab: TabType) => void;
-  onOpenSaleModal: () => void;
-  onOpenNolaModal: () => void;
-  onOpenCostModal: () => void;
-}
+interface CockpitDashboardProps { onNavigate: (tab: TabType) => void; onOpenSaleModal: () => void; onOpenNolaModal: () => void; onOpenCostModal: () => void; }
+type Channel = 'B2C' | 'B2B';
 
-export const CockpitDashboard: React.FC<CockpitDashboardProps> = ({
-  onNavigate,
-  onOpenSaleModal,
-  onOpenNolaModal,
-  onOpenCostModal,
-}) => {
-  const {
-    currentDRE,
-    pecReais,
-    pecUnits,
-    peeReais,
-    peeUnits,
-    pefReais,
-    weightedMCPercent,
-    totalNolaLossReais,
-    totalNolaDiscardedUnits,
-    marginOfSafetyReais,
-    marginOfSafetyPercent,
-    dailyTargetPEC,
-    productCalculations,
-    paretoLossReasons,
-    sales,
-  } = useFinance();
+export const CockpitDashboard: React.FC<CockpitDashboardProps> = ({ onNavigate, onOpenSaleModal, onOpenNolaModal }) => {
+  const { currentDRE, pecReais, pecUnits, weightedMCPercent, totalNolaLossReais, totalNolaDiscardedUnits, productCalculations, paretoLossReasons, sectorLosses, weeklyLossTrends, sales, breakEvenStatus, lowStockSupplies, zeroStockSupplies, getStockIntelligence, getCommercialPerformance } = useFinance();
+  const hasSales = currentDRE.grossRevenue > 0;
+  const isPositiveResult = currentDRE.operationalProfit >= 0;
+  const hasValidBreakEven = breakEvenStatus === 'valid';
+  const stockIntelligence = getStockIntelligence();
+  const criticalStockItems = stockIntelligence.items.filter((item) => item.risk === 'critical');
+  const attentionStockItems = stockIntelligence.items.filter((item) => item.risk === 'attention');
+  const principalStockRisk = criticalStockItems[0] ?? attentionStockItems[0];
+  const commercialPerformance = getCommercialPerformance();
 
-  // Progress towards Break-Even (PEC)
-  const breakEvenProgress = pecReais > 0 ? Math.min((currentDRE.grossRevenue / pecReais) * 100, 150) : 0;
-  const isPastBreakEven = currentDRE.grossRevenue >= pecReais && pecReais > 0;
+  // Mesmas premissas do FinanceContext: impostos por canal + custo variável real com perdas rateadas.
+  const channelPerformance = (['B2C', 'B2B'] as Channel[]).map((channel) => {
+    const records = sales.filter((sale) => sale.channel === channel);
+    const revenue = records.reduce((total, sale) => total + sale.totalRevenue, 0);
+    const margin = records.reduce((total, sale) => {
+      const product = productCalculations[sale.productCode];
+      const taxRate = sale.taxRateApplied ?? (channel === 'B2C' ? product?.product.taxRateB2C : product?.product.taxRateB2B) ?? (channel === 'B2C' ? 7.5 : 5.5);
+      const costUnit = sale.financialSnapshotVersion
+        ? (sale.directCostUnit ?? sale.variableCostUnit) + sale.allocatedLossUnit
+        : product?.realVariableCost ?? sale.variableCostUnit + sale.allocatedLossUnit;
+      const cost = costUnit * sale.quantityUnits;
+      return total + sale.totalRevenue * (1 - taxRate / 100) - cost;
+    }, 0);
+    return { channel, label: channel, revenue, margin, marginPercent: revenue > 0 ? margin / revenue * 100 : 0, participation: currentDRE.grossRevenue > 0 ? revenue / currentDRE.grossRevenue * 100 : 0 };
+  });
 
-  // Chart data for Sales mix
-  const b2cSales = sales.filter((s) => s.channel === 'B2C');
-  const b2bSales = sales.filter((s) => s.channel === 'B2B');
-  const totalB2CRev = b2cSales.reduce((acc, s) => acc + s.totalRevenue, 0);
-  const totalB2BRev = b2bSales.reduce((acc, s) => acc + s.totalRevenue, 0);
+  const productPerformance = Object.values(productCalculations).map((calculation) => {
+    const records = sales.filter((sale) => sale.productCode === calculation.product.code);
+    const revenue = records.reduce((total, sale) => total + sale.totalRevenue, 0);
+    const margin = records.reduce((total, sale) => {
+      const rate = sale.taxRateApplied ?? (sale.channel === 'B2C' ? calculation.product.taxRateB2C : calculation.product.taxRateB2B);
+      const costUnit = sale.financialSnapshotVersion
+        ? (sale.directCostUnit ?? sale.variableCostUnit) + sale.allocatedLossUnit
+        : calculation.realVariableCost;
+      return total + sale.totalRevenue * (1 - rate / 100) - costUnit * sale.quantityUnits;
+    }, 0);
+    return { code: calculation.product.code, name: calculation.product.name, shortName: calculation.product.name.replace('Lasanha ', '').replace('Rondelli ', ''), revenue, margin, marginPercent: revenue > 0 ? margin / revenue * 100 : 0, totalLoss: calculation.totalLossCostNola };
+  }).filter((product) => product.revenue > 0).sort((a, b) => b.marginPercent - a.marginPercent);
 
-  const channelMixData = [
-    { name: 'B2C (Varejo / Direto)', value: totalB2CRev, color: '#10b981' },
-    { name: 'B2B (Atacado / Foodservice)', value: totalB2BRev, color: '#3b82f6' },
-  ];
+  const bestProduct = productPerformance[0];
+  const lowestProduct = productPerformance.at(-1);
+  const highestContribution = [...productPerformance].sort((a, b) => b.margin - a.margin)[0];
+  const bestChannel = [...channelPerformance].sort((a, b) => b.marginPercent - a.marginPercent)[0];
+  const lowestChannel = [...channelPerformance].sort((a, b) => a.marginPercent - b.marginPercent)[0];
+  const topLosses = paretoLossReasons.slice(0, 5);
+  const topLoss = topLosses[0];
+  const topSector = sectorLosses[0];
+  const criticalWeek = [...weeklyLossTrends].sort((a, b) => b.totalCost - a.totalCost)[0];
+  const mostImpactedProduct = [...productPerformance].sort((a, b) => b.totalLoss - a.totalLoss)[0];
+  const topThreeLossShare = topLosses.slice(0, 3).reduce((total, item) => total + item.percentage, 0);
+  const financialStatus = !hasSales ? 'Não há vendas suficientes para consolidar a situação financeira.' : breakEvenStatus !== 'valid' ? 'A margem de contribuição não é positiva. O ponto de equilíbrio não é atingível nas condições atuais.' : isPositiveResult ? 'A margem de contribuição atual é suficiente para cobrir os custos fixos considerados na base demonstrativa.' : 'A margem de contribuição atual não é suficiente para cobrir os custos fixos considerados na base demonstrativa.';
+  const commercialHighlights = getCommercialHighlights(commercialPerformance);
+  const principalGoal = commercialHighlights.primary;
+  const operationalPriorities = buildOperationalPriorities({
+    commercial: commercialPerformance,
+    stock: stockIntelligence,
+    productMetrics: productPerformance.map((product) => ({ code: product.code, name: product.name, units: sales.filter((sale) => sale.productCode === product.code).reduce((total, sale) => total + sale.quantityUnits, 0), marginPercent: product.marginPercent })),
+    operationalProfit: currentDRE.operationalProfit,
+    topLoss: topLoss ? { reason: topLoss.reason, totalCost: topLoss.totalCost, percentage: topLoss.percentage } : undefined,
+  });
 
-  // Pareto Top 3 loss reasons
-  const topLosses = paretoLossReasons.slice(0, 3);
-
-  // Product loss ranking
-  const productLossList = Object.values(productCalculations)
-    .map((pc) => ({
-      name: pc.product.name,
-      code: pc.product.code,
-      allocatedLoss: pc.allocatedLossPerUnit,
-      totalLoss: pc.totalLossCostNola,
-      realCost: pc.realVariableCost,
-      mcPercentB2C: pc.mcPercentB2C,
-      mcPercentB2B: pc.mcPercentB2B,
-    }))
-    .sort((a, b) => b.totalLoss - a.totalLoss);
-
-  return (
-    <div className="space-y-6">
-      {/* Welcome & Guided Journey Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 rounded-2xl border border-slate-800 p-5 shadow-sm text-white relative overflow-hidden">
-        <div className="absolute -right-8 -bottom-8 w-48 h-48 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 relative z-10">
-          <div>
-            <div className="flex items-center space-x-2 text-amber-400 text-xs font-semibold uppercase tracking-wider mb-1">
-              <Sparkles className="w-4 h-4" />
-              <span>Painel Integrado de Gestão • Guardiões da Lasanha</span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
-              Cockpit Executivo & Termômetro Operacional
-            </h1>
-            <p className="text-sm text-slate-300 mt-1 max-w-3xl">
-              Monitore a esteira completa: <strong>Custos Reais com Perdas NOLA</strong> ➔{' '}
-              <strong>Precificação B2C/B2B</strong> ➔ <strong>Ponto de Equilíbrio (CVL)</strong> ➔{' '}
-              <strong>Meta de Lucro Líquido</strong>.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={onOpenSaleModal}
-              id="btn-dash-sale"
-              className="flex items-center space-x-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm cursor-pointer"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>Lançar Venda</span>
-            </button>
-            <button
-              onClick={onOpenNolaModal}
-              id="btn-dash-nola"
-              className="flex items-center space-x-2 px-3.5 py-2 bg-rose-700 hover:bg-rose-600 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm cursor-pointer"
-            >
-              <AlertOctagon className="w-4 h-4" />
-              <span>Lançar Perda NOLA</span>
-            </button>
-            <button
-              onClick={() => onNavigate('guide')}
-              id="btn-dash-guide"
-              className="flex items-center space-x-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer"
-            >
-              <HelpCircle className="w-4 h-4 text-amber-400" />
-              <span>Guia Didático</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 5-Step Journey Navigation Breadcrumbs */}
-        <div className="mt-5 pt-4 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
-          <button
-            onClick={() => onNavigate('pricing')}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors text-left group cursor-pointer"
-          >
-            <span className="text-slate-300 group-hover:text-amber-400 font-medium">1. Produtos & Custos</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400" />
-          </button>
-          <button
-            onClick={() => onNavigate('fixed-costs')}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors text-left group cursor-pointer"
-          >
-            <span className="text-slate-300 group-hover:text-amber-400 font-medium">2. Custos Fixos</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400" />
-          </button>
-          <button
-            onClick={() => onNavigate('sales')}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors text-left group cursor-pointer"
-          >
-            <span className="text-slate-300 group-hover:text-amber-400 font-medium">3. Vendas & Canais</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400" />
-          </button>
-          <button
-            onClick={() => onNavigate('breakeven')}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors text-left group cursor-pointer"
-          >
-            <span className="text-slate-300 group-hover:text-amber-400 font-medium">4. Ponto Equilíbrio</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400" />
-          </button>
-          <button
-            onClick={() => onNavigate('nola')}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors text-left group cursor-pointer"
-          >
-            <span className="text-slate-300 group-hover:text-amber-400 font-medium">5. Perdas NOLA</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400" />
-          </button>
-        </div>
-      </div>
-
-      {/* 4 Hero KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Faturamento Registrado */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Faturamento Atual</span>
-            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <DollarSign className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="my-2">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {formatCurrency(currentDRE.grossRevenue)}
-            </div>
-            <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1">
-              <span className="text-emerald-600 font-semibold">{sales.length} vendas registradas</span>
-              <span>•</span>
-              <span>Líquido: {formatCurrency(currentDRE.netRevenue)}</span>
-            </div>
-          </div>
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>Meta Diária PEC:</span>
-            <span className="font-semibold text-slate-800">{formatCurrency(dailyTargetPEC)}/dia</span>
-          </div>
-        </div>
-
-        {/* Card 2: Margem de Contribuição Média */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">MC Média Ponderada</span>
-            <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Percent className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="my-2">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {formatPercent(weightedMCPercent)}
-            </div>
-            <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1">
-              <span className="text-amber-600 font-semibold">
-                {formatCurrency(currentDRE.contributionMargin)}
-              </span>
-              <span>gerados para cobrir custos fixos</span>
-            </div>
-          </div>
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>Saúde da Margem:</span>
-            <span className="font-semibold text-emerald-600">
-              {weightedMCPercent >= 35 ? 'Excelente (>35%)' : 'Atenção (<35%)'}
-            </span>
-          </div>
-        </div>
-
-        {/* Card 3: Ponto de Equilíbrio Contábil (PEC) */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">P.E. Contábil (PEC)</span>
-            <div className="w-9 h-9 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="my-2">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {formatCurrency(pecReais)}
-            </div>
-            <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1">
-              <span className="text-sky-600 font-semibold">{formatNumber(pecUnits)} unidades</span>
-              <span>necessárias p/ lucro zero</span>
-            </div>
-          </div>
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>PE Econômico (c/ lucro):</span>
-            <span className="font-semibold text-slate-800">{formatCurrency(peeReais)}</span>
-          </div>
-        </div>
-
-        {/* Card 4: Perdas NOLA Acumuladas */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Perdas NOLA (27 sem.)</span>
-            <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
-              <AlertOctagon className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="my-2">
-            <div className="text-2xl font-extrabold text-rose-600 tracking-tight">
-              {formatCurrency(totalNolaLossReais)}
-            </div>
-            <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1">
-              <span className="text-rose-600 font-semibold">{formatNumber(totalNolaDiscardedUnits)} un.</span>
-              <span>descartadas no chão de fábrica</span>
-            </div>
-          </div>
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>Projeção Anual:</span>
-            <span className="font-semibold text-rose-700">
-              {formatCurrency(totalNolaLossReais * (52 / 27))}/ano
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Break-Even Thermometer (Visual Gauge) */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-          <div>
-            <div className="flex items-center space-x-2">
-              <h2 className="text-base font-bold text-slate-900">Termômetro da Operação: Faturamento vs. Ponto de Equilíbrio</h2>
-              {isPastBreakEven ? (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Zona de Lucro
-                </span>
-              ) : (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                  <Flame className="w-3.5 h-3.5 mr-1" /> Fase de Cobertura de Custos
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Visualização didática: enquanto o faturamento não atinge o PEC, a fábrica opera em prejuízo para pagar as contas fixas.
-            </p>
-          </div>
-
-          <div className="text-right">
-            <span className="text-xs text-slate-500">Margem de Segurança:</span>
-            <div className={`text-sm font-bold ${marginOfSafetyReais >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-              {formatCurrency(marginOfSafetyReais)} ({formatPercent(marginOfSafetyPercent)})
-            </div>
-          </div>
-        </div>
-
-        {/* Visual Progress Bar */}
-        <div className="space-y-2">
-          <div className="h-6 w-full bg-slate-100 rounded-full overflow-hidden p-1 relative flex items-center border border-slate-200">
-            {/* PEC target line at ~66% mark or dynamic */}
-            <div
-              className={`h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2 text-[11px] font-bold text-white ${
-                isPastBreakEven
-                  ? 'bg-gradient-to-r from-amber-500 via-emerald-500 to-emerald-600 shadow-xs'
-                  : 'bg-gradient-to-r from-rose-500 to-amber-500'
-              }`}
-              style={{ width: `${Math.max(Math.min(breakEvenProgress, 100), 5)}%` }}
-            >
-              {breakEvenProgress.toFixed(0)}%
-            </div>
-          </div>
-
-          <div className="flex justify-between text-xs text-slate-500 px-1 font-medium">
-            <span>R$ 0,00</span>
-            <span className="text-sky-700 font-bold">PEC: {formatCurrency(pecReais)} (Zero a Zero)</span>
-            <span className="text-emerald-700 font-bold">PEE (Meta): {formatCurrency(peeReais)}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* DRE Sintético & Mix de Canais */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* DRE Sintético (2 cols) */}
-        <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-base font-bold text-slate-900">DRE Gerencial Sintético (Demonstrativo de Resultado)</h2>
-              <p className="text-xs text-slate-500">Custeio por absorção das perdas NOLA no CPV</p>
-            </div>
-            <button
-              onClick={() => onNavigate('breakeven')}
-              className="text-xs font-semibold text-amber-600 hover:text-amber-700 flex items-center space-x-1 cursor-pointer"
-            >
-              <span>Ver Análise CVL</span>
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="divide-y divide-slate-100 text-sm">
-            {/* 1. Receita Bruta */}
-            <div className="py-2.5 flex items-center justify-between font-semibold text-slate-900">
-              <span className="flex items-center space-x-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span>(+) Receita Bruta de Vendas</span>
-              </span>
-              <span>{formatCurrency(currentDRE.grossRevenue)}</span>
-            </div>
-
-            {/* 2. Impostos */}
-            <div className="py-2 flex items-center justify-between text-slate-600 pl-4 text-xs">
-              <span>(-) Impostos sobre Vendas (Simples/ICMS)</span>
-              <span className="text-rose-600">-{formatCurrency(currentDRE.taxes)}</span>
-            </div>
-
-            {/* 3. Receita Líquida */}
-            <div className="py-2.5 flex items-center justify-between font-semibold text-slate-800 bg-slate-50/50 px-2 rounded-lg">
-              <span>(=) Receita Operacional Líquida</span>
-              <span>{formatCurrency(currentDRE.netRevenue)}</span>
-            </div>
-
-            {/* 4. CPV Base (Insumos + Embalagens + MOD) */}
-            <div className="py-2 flex items-center justify-between text-slate-600 pl-4 text-xs">
-              <span>(-) Custos dos Produtos Vendidos (Insumos + Embalagens + MOD)</span>
-              <span className="text-rose-600">-{formatCurrency(currentDRE.variableCostsCPV)}</span>
-            </div>
-
-            {/* 5. Perdas NOLA Alocadas */}
-            <div className="py-2 flex items-center justify-between text-slate-700 pl-4 text-xs bg-amber-50/60 border-l-2 border-amber-500 my-1 px-2 rounded">
-              <span className="flex items-center space-x-1">
-                <span className="font-semibold text-amber-900">(-) Perdas NOLA Alocadas ao CPV</span>
-                <span className="text-[10px] text-amber-700">(Refugo rateado nas unidades vendidas)</span>
-              </span>
-              <span className="font-semibold text-rose-600">-{formatCurrency(currentDRE.allocatedLosses)}</span>
-            </div>
-
-            {/* 6. Margem de Contribuição */}
-            <div className="py-2.5 flex items-center justify-between font-bold text-amber-950 bg-amber-100/40 px-2 rounded-lg border border-amber-200/50">
-              <span className="flex items-center space-x-2">
-                <Percent className="w-4 h-4 text-amber-600" />
-                <span>(=) Margem de Contribuição Total</span>
-              </span>
-              <div className="text-right">
-                <div>{formatCurrency(currentDRE.contributionMargin)}</div>
-                <div className="text-[11px] font-normal text-amber-800">{formatPercent(currentDRE.contributionMarginPercent)} da Receita</div>
-              </div>
-            </div>
-
-            {/* 7. Custos Fixos */}
-            <div className="py-2 flex items-center justify-between text-slate-600 pl-4 text-xs">
-              <span>(-) Custos & Despesas Fixas Totais</span>
-              <span className="text-rose-600">-{formatCurrency(currentDRE.fixedCostsTotal)}</span>
-            </div>
-
-            {/* 8. Lucro Operacional */}
-            <div
-              className={`py-3 flex items-center justify-between font-extrabold text-base px-3 rounded-xl border ${
-                currentDRE.operationalProfit >= 0
-                  ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                  : 'bg-rose-50 text-rose-900 border-rose-200'
-              }`}
-            >
-              <span>(=) Lucro Operacional Líquido</span>
-              <div className="text-right">
-                <div>{formatCurrency(currentDRE.operationalProfit)}</div>
-                <div className="text-xs font-semibold">
-                  {formatPercent(currentDRE.operationalProfitPercent)} da Receita
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Mix de Canais & Resumo Rápido (1 col) */}
-        <div className="space-y-6">
-          {/* Channel Mix Chart */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-            <h2 className="text-base font-bold text-slate-900 mb-1">Mix de Vendas por Canal</h2>
-            <p className="text-xs text-slate-500 mb-4">B2C (Varejo Alto Valor) vs. B2B (Escala)</p>
-
-            <div className="h-44">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={channelMixData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={45}
-                    outerRadius={65}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {channelMixData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(val: number) => formatCurrency(val)} />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '11px' }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="mt-2 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-center text-xs">
-              <div className="p-2 bg-emerald-50/70 rounded-lg">
-                <span className="text-emerald-700 font-semibold block">B2C (Direto)</span>
-                <span className="text-slate-900 font-bold">{formatCurrency(totalB2CRev)}</span>
-                <span className="text-[10px] text-slate-500 block">Margem ~49%</span>
-              </div>
-              <div className="p-2 bg-blue-50/70 rounded-lg">
-                <span className="text-blue-700 font-semibold block">B2B (Atacado)</span>
-                <span className="text-slate-900 font-bold">{formatCurrency(totalB2BRev)}</span>
-                <span className="text-[10px] text-slate-500 block">Margem ~30%</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Top 3 Loss Causes */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-base font-bold text-slate-900">Vilões de Perdas (Top 3)</h2>
-              <button
-                onClick={() => onNavigate('nola')}
-                className="text-xs font-semibold text-rose-600 hover:text-rose-700 flex items-center cursor-pointer"
-              >
-                <span>Ver Pareto</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <p className="text-xs text-slate-500 mb-3">Conforme dados NOLA S01 a S27</p>
-
-            <div className="space-y-2.5">
-              {topLosses.map((item, idx) => (
-                <div key={item.reason} className="flex items-center justify-between text-xs p-2 bg-slate-50 rounded-lg border border-slate-100">
-                  <div className="flex items-center space-x-2">
-                    <span className="w-5 h-5 rounded-full bg-rose-100 text-rose-700 font-bold flex items-center justify-center text-[10px]">
-                      #{idx + 1}
-                    </span>
-                    <div>
-                      <span className="font-semibold text-slate-800 block">{item.reason}</span>
-                      <span className="text-[10px] text-slate-500">{item.totalUnits} unidades</span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-bold text-rose-600">{formatCurrency(item.totalCost)}</span>
-                    <span className="text-[10px] text-slate-400 block">{formatPercent(item.percentage)} do total</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Product Cost & Margin Summary Table */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">Produtos da Guardiões da Lasanha: Custo Real & Margens</h2>
-            <p className="text-xs text-slate-500">
-              Cada produto tem sua perda de fábrica alocada diretamente no custo unitário.
-            </p>
-          </div>
-          <button
-            onClick={() => onNavigate('pricing')}
-            className="text-xs font-semibold text-amber-600 hover:text-amber-700 flex items-center space-x-1 cursor-pointer"
-          >
-            <span>Gerenciar Fichas Técnicas & Preços</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-xs">
-            <thead>
-              <tr className="bg-slate-50 text-slate-600 font-semibold">
-                <th className="py-2.5 px-3 text-left">Código / Produto</th>
-                <th className="py-2.5 px-3 text-right">Custo Insumos + MOD</th>
-                <th className="py-2.5 px-3 text-right bg-amber-50/70 text-amber-900">Perda NOLA Alocada</th>
-                <th className="py-2.5 px-3 text-right font-bold">Custo Real Total</th>
-                <th className="py-2.5 px-3 text-right text-emerald-800 bg-emerald-50/50">Preço B2C (MC%)</th>
-                <th className="py-2.5 px-3 text-right text-blue-800 bg-blue-50/50">Preço B2B (MC%)</th>
-                <th className="py-2.5 px-3 text-right">Perda Total 27 sem.</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {productLossList.map((item) => {
-                const prod = productCalculations[item.code as any];
-                const baseCostDirect = prod.product.baseCost + prod.product.packagingCost + prod.product.directLaborCost + prod.product.otherVariableCost;
-                return (
-                  <tr key={item.code} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="py-2.5 px-3 font-semibold text-slate-900">
-                      <span className="font-mono text-[11px] text-slate-400 mr-1.5">{item.code}</span>
-                      {item.name}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-slate-600">
-                      {formatCurrency(baseCostDirect)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-semibold text-amber-800 bg-amber-50/40">
-                      +{formatCurrency(item.allocatedLoss)}/un
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                      {formatCurrency(item.realCost)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right bg-emerald-50/30">
-                      <span className="font-semibold text-slate-900">{formatCurrency(prod.product.priceB2C)}</span>
-                      <span className="text-[10px] text-emerald-700 ml-1 font-bold">({formatPercent(item.mcPercentB2C)})</span>
-                    </td>
-                    <td className="py-2.5 px-3 text-right bg-blue-50/30">
-                      <span className="font-semibold text-slate-900">{formatCurrency(prod.product.priceB2B)}</span>
-                      <span className="text-[10px] text-blue-700 ml-1 font-bold">({formatPercent(item.mcPercentB2B)})</span>
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-semibold text-rose-600">
-                      {formatCurrency(item.totalLoss)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+  return <div className="cockpit-refined space-y-6">
+    <div className="cockpit-signal-row grid grid-cols-1 gap-3 xl:grid-cols-2">
+    <section className="cockpit-signal cockpit-signal-stock rounded-2xl border border-[#CFF2FA] bg-[#F9FEFF] p-4 text-sm text-neutral-700"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#087B9F]">Inteligência de estoque</p><p className="mt-1"><button onClick={() => onNavigate('inventory')} className="font-semibold text-[#08627F] hover:underline">{criticalStockItems.length} insumo(s) crítico(s)</button> · {attentionStockItems.length} em atenção · físico: {zeroStockSupplies.length} zerado(s) e {lowStockSupplies.length} baixo(s).</p>{principalStockRisk ? <p className="mt-1 text-xs text-neutral-600">Principal risco: <strong>{principalStockRisk.supply.name}</strong> · {principalStockRisk.coverageDays === undefined ? 'cobertura indisponível' : `${principalStockRisk.coverageDays.toFixed(1).replace('.', ',')} dias`} · {principalStockRisk.affectedProducts.join(', ') || 'sem produto vinculado'}. <strong>{principalStockRisk.action}</strong></p> : <p className="mt-1 text-xs text-neutral-600">Configure ficha técnica e registre vendas para calcular consumo e cobertura.</p>}</div><button onClick={() => onNavigate('inventory')} className="w-fit text-xs font-semibold text-[#08627F] hover:underline">Ver inteligência de estoque <ChevronRight className="inline h-3.5 w-3.5" /></button></div></section>
+    <section className="cockpit-signal cockpit-signal-commercial rounded-2xl border border-[#CAE79A] bg-[#F4FAEA] p-4 text-sm text-neutral-700"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#5F9C1C]">Desempenho comercial</p>{principalGoal ? <><p className="mt-1"><strong>{principalGoal.label}</strong> · meta {formatCurrency(principalGoal.goal.revenueTarget)} · realizado {formatCurrency(principalGoal.revenueActual)}.</p><p className="mt-1 text-xs text-neutral-600">Atingimento: <strong>{principalGoal.revenueAchievement === undefined ? '— sem base de meta' : `${formatDecimal(principalGoal.revenueAchievement, 1)}%`}</strong> · desvio {formatCurrency(principalGoal.revenueDeviation)} · {principalGoal.status === 'achieved' ? 'Meta atingida' : principalGoal.status === 'in_progress' ? 'Dentro do ritmo' : principalGoal.status === 'below' ? 'Abaixo do ritmo' : principalGoal.remainingDays === undefined ? 'Período encerrado' : 'Dados insuficientes'}{principalGoal.status !== 'achieved' && principalGoal.remainingDays !== undefined && principalGoal.revenueDailyPace !== undefined ? ` · ritmo: ${formatCurrency(principalGoal.revenueDailyPace)}/dia` : ''}.</p><div className="mt-2 flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-white px-2 py-1">Canal: <strong>{commercialHighlights.bestChannel ? `${commercialHighlights.bestChannel.item.label} · ${formatDecimal(commercialHighlights.bestChannel.achievement ?? 0, 1)}%` : 'sem meta comparável'}</strong></span><span className="rounded-full bg-white px-2 py-1">Produto: <strong>{commercialHighlights.bestProduct ? `${commercialHighlights.bestProduct.item.label} · ${formatDecimal(commercialHighlights.bestProduct.achievement ?? 0, 1)}%` : 'sem meta comparável'}</strong></span></div></> : <p className="mt-1">{commercialPerformance.hasSales ? 'Há vendas registradas, mas nenhuma meta comercial cadastrada.' : 'Cadastre metas e registre vendas para acompanhar o desempenho comercial.'}</p>}</div><button onClick={() => onNavigate('sales')} className="w-fit text-xs font-semibold text-[#426D12] hover:underline">Ver metas e desempenho <ChevronRight className="inline h-3.5 w-3.5" /></button></div></section>
     </div>
-  );
+    <section className="cockpit-hero relative overflow-hidden rounded-2xl border border-neutral-200 border-l-4 border-l-[#FFB800] bg-white p-5 shadow-sm">
+      <div className="pointer-events-none absolute -bottom-10 -right-10 h-56 w-56 rounded-full bg-[#FFB800]/10 blur-3xl" />
+      <div className="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div><div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#D99000]"><Sparkles className="h-4 w-4" /> Central de decisão gerencial</div><h1 className="text-xl font-bold tracking-tight text-[#111111] sm:text-2xl">Cockpit Executivo</h1><p className="mt-1 max-w-3xl text-sm text-neutral-600">Situação financeira, rentabilidade, perdas e prioridades para a Guardiões da Lasanha.</p></div><div className="flex flex-wrap gap-2"><button onClick={onOpenSaleModal} className="flex items-center gap-2 rounded-xl bg-[#75B82A] px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#8CCB35]"><PlusCircle className="h-4 w-4" />Lançar Venda</button><button onClick={onOpenNolaModal} className="flex items-center gap-2 rounded-xl bg-[#C92F0A] px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#E33B0C]"><AlertOctagon className="h-4 w-4" />Lançar Perda</button><button onClick={() => onNavigate('guide')} className="flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3.5 py-2 text-xs font-semibold text-neutral-700 hover:bg-[#F7F7F5]"><HelpCircle className="h-4 w-4 text-[#D99000]" />Guia Didático</button></div></div>
+      <div className="cockpit-context relative mt-4 flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-neutral-200 bg-[#F7F7F5] px-3 py-2 text-[11px] text-neutral-600"><strong className="text-neutral-800">{DEMO_DATA_CONTEXT.label}</strong><span>Vendas: {DEMO_DATA_CONTEXT.sales.periodLabel}</span><span>Custos fixos: {DEMO_DATA_CONTEXT.fixedCosts.periodLabel}</span><span>Perdas: {DEMO_DATA_CONTEXT.nolaLosses.periodLabel}</span></div>
+    </section>
+
+    <section className="cockpit-executive-kpis grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiCard label="Receita bruta" value={hasSales ? formatCurrency(currentDRE.grossRevenue) : '—'} description="No período demonstrativo" icon={CircleDollarSign} tone="neutral" />
+      <KpiCard label="Margem de contribuição" value={hasSales ? formatCurrency(currentDRE.contributionMargin) : '—'} description="Após impostos e custos variáveis" icon={DollarSign} tone="highlight" />
+      <KpiCard label="Resultado operacional" value={hasSales ? formatCurrency(currentDRE.operationalProfit) : '—'} description={hasSales ? `${formatPercent(currentDRE.operationalProfitPercent)} da receita bruta` : 'Aguardando vendas'} icon={isPositiveResult ? TrendingUp : TrendingDown} tone={isPositiveResult && hasSales ? 'positive' : 'critical'} />
+      <KpiCard label="Ponto de equilíbrio" value={hasValidBreakEven ? formatCurrency(pecReais) : 'Não atingível'} description={hasValidBreakEven ? `${formatNumber(pecUnits)} unidades no mix atual` : 'Margem não permite PEC válido'} icon={ShieldCheck} tone={hasValidBreakEven ? 'info' : 'critical'} />
+    </section>
+
+    <ChartPanel className="cockpit-main-chart" eyebrow="Evolução" title="Receita e margem por canal" description="Leitura resumida do recorte demonstrativo atual." action="Ver vendas" onAction={() => onNavigate('sales')}><ResponsiveContainer width="100%" height="100%"><BarChart data={channelPerformance} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}><XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} /><YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(value) => `R$ ${(value / 1000).toFixed(0)}k`} /><Tooltip formatter={(value: number) => formatCurrency(value)} /><Bar dataKey="revenue" name="Receita bruta" fill="#00A6D7" radius={[5, 5, 0, 0]} /><Bar dataKey="margin" name="Margem de contribuição" fill="#9DDD25" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></ChartPanel>
+
+    <section className={`cockpit-status rounded-2xl border p-5 shadow-sm ${!hasSales ? 'border-[#FFEDB0] bg-[#FFF8E6]' : isPositiveResult ? 'border-[#CAE79A] bg-[#F4FAEA]' : 'border-[#FFB79B] bg-[#FFF0EA]'}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3">{isPositiveResult && hasSales ? <CheckCircle2 className="mt-0.5 h-6 w-6 text-[#5F9C1C]" /> : <CircleAlert className="mt-0.5 h-6 w-6 text-[#C92F0A]" />}<div><p className="text-xs font-bold uppercase tracking-wide">Saúde financeira</p><h2 className="mt-1 text-base font-bold text-[#111111]">{isPositiveResult && hasSales ? 'Operação cobre os custos fixos' : 'Atenção à cobertura de custos'}</h2><p className="mt-1 max-w-3xl text-sm leading-relaxed text-neutral-700">{financialStatus}</p></div></div><button onClick={() => onNavigate('dre')} className="flex w-fit items-center gap-1 text-xs font-semibold text-[#08627F] hover:text-[#06495E]">Ver DRE gerencial <ChevronRight className="h-3.5 w-3.5" /></button></div></section>
+
+    <section><div className="mb-3 flex items-end justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#087B9F]">Visão financeira</p><h2 className="text-lg font-bold text-[#111111]">Indicadores que orientam o resultado</h2></div><p className="hidden text-xs text-neutral-500 sm:block">MC sobre receita bruta.</p></div><div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12"><KpiCard className="xl:col-span-3" label="Resultado operacional" value={hasSales ? formatCurrency(currentDRE.operationalProfit) : '—'} description={hasSales ? `${formatPercent(currentDRE.operationalProfitPercent)} da receita bruta` : 'Aguardando vendas'} icon={isPositiveResult ? TrendingUp : TrendingDown} tone={isPositiveResult && hasSales ? 'positive' : 'critical'} /><KpiCard className="xl:col-span-3" label="Margem de contribuição" value={hasSales ? formatCurrency(currentDRE.contributionMargin) : '—'} description="Após impostos e custos variáveis" icon={DollarSign} tone="highlight" /><KpiCard className="xl:col-span-2" label="MC sobre receita bruta" value={hasSales ? formatPercent(weightedMCPercent) : '—'} description="Índice de contribuição" icon={Percent} tone="highlight" /><KpiCard className="xl:col-span-2" label="Ponto de equilíbrio" value={hasValidBreakEven ? formatCurrency(pecReais) : 'Não atingível'} description={hasValidBreakEven ? `${formatNumber(pecUnits)} unidades no mix atual` : 'Margem não permite PEC válido'} icon={ShieldCheck} tone={hasValidBreakEven ? 'info' : 'critical'} /><KpiCard className="xl:col-span-2" label="Receita líquida" value={hasSales ? formatCurrency(currentDRE.netRevenue) : '—'} description={`Bruta: ${formatCurrency(currentDRE.grossRevenue)}`} icon={CircleDollarSign} tone="neutral" /><KpiCard className="xl:col-span-2" label="Custos fixos" value={formatCurrency(currentDRE.fixedCostsTotal)} description="Referência mensal" icon={Landmark} tone="attention" /><KpiCard className="xl:col-span-2" label="Perdas" value={formatCurrency(totalNolaLossReais)} description={`${formatNumber(totalNolaDiscardedUnits)} unidades`} icon={AlertOctagon} tone="critical" /></div></section>
+
+    <section className="grid grid-cols-1 gap-6 xl:grid-cols-5"><ChartPanel className="xl:col-span-3" eyebrow="Rentabilidade" title="Onde a empresa ganha mais dinheiro?" description="Receita e margem de contribuição por canal, no recorte atual." action="Ver vendas" onAction={() => onNavigate('sales')}><ResponsiveContainer width="100%" height="100%"><BarChart data={channelPerformance} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}><XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} /><YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(value) => `R$ ${(value / 1000).toFixed(0)}k`} /><Tooltip formatter={(value: number) => formatCurrency(value)} /><Bar dataKey="revenue" name="Receita bruta" fill="#00A6D7" radius={[5, 5, 0, 0]} /><Bar dataKey="margin" name="Margem de contribuição" fill="#9DDD25" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></ChartPanel><aside className="rounded-2xl border border-neutral-200/80 bg-white p-6 shadow-xs xl:col-span-2"><p className="text-xs font-bold uppercase tracking-wider text-[#D99000]">Rentabilidade</p><h2 className="text-lg font-bold text-[#111111]">Resumo por produto</h2><div className="mt-4 space-y-3"><MetricRow label="Maior margem" value={bestProduct ? `${bestProduct.name} · ${formatPercent(bestProduct.marginPercent)}` : 'Sem vendas'} tone="positive" /><MetricRow label="Menor margem" value={lowestProduct ? `${lowestProduct.name} · ${formatPercent(lowestProduct.marginPercent)}` : 'Sem vendas'} tone="attention" /><MetricRow label="Maior contribuição" value={highestContribution ? `${highestContribution.name} · ${formatCurrency(highestContribution.margin)}` : 'Sem vendas'} tone="info" /><MetricRow label="Melhor canal" value={bestChannel ? `${bestChannel.label} · ${formatPercent(bestChannel.marginPercent)}` : 'Sem vendas'} tone="info" /></div>{bestChannel && lowestChannel && bestChannel.channel !== lowestChannel.channel && <p className="mt-4 rounded-xl bg-[#EAF9FD] p-3 text-xs leading-relaxed text-[#06495E]">{bestChannel.label} tem MC {Math.abs(bestChannel.marginPercent - lowestChannel.marginPercent).toFixed(1).replace('.', ',')} p.p. superior a {lowestChannel.label}.</p>}</aside></section>
+
+    <ChartPanel eyebrow="Rentabilidade por produto" title="Margem de contribuição sobre receita bruta" description="Produtos com vendas no recorte demonstrativo atual." action="Ver custos e precificação" onAction={() => onNavigate('pricing')}><ResponsiveContainer width="100%" height="100%"><BarChart data={productPerformance} layout="vertical" margin={{ top: 4, right: 28, left: 35, bottom: 4 }}><XAxis type="number" unit="%" tick={{ fontSize: 11, fill: '#64748b' }} /><YAxis type="category" dataKey="shortName" width={100} tick={{ fontSize: 11, fill: '#475569' }} /><Tooltip formatter={(value: number) => formatPercent(value)} /><Bar dataKey="marginPercent" name="MC sobre receita bruta" radius={[0, 5, 5, 0]}>{productPerformance.map((product, index) => <Cell key={product.code} fill={index === productPerformance.length - 1 ? '#F66A3A' : '#75B82A'} />)}</Bar></BarChart></ResponsiveContainer></ChartPanel>
+
+    <section className="grid grid-cols-1 gap-6 xl:grid-cols-5"><ChartPanel className="xl:col-span-3" eyebrow="Perdas" title="Onde a empresa está perdendo dinheiro?" description="Pareto de causas por impacto financeiro — acumulado de 27 semanas." action="Ver perdas" onAction={() => onNavigate('nola')}><ResponsiveContainer width="100%" height="100%"><BarChart data={topLosses} layout="vertical" margin={{ top: 4, right: 20, left: 80, bottom: 4 }}><XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(value) => `R$ ${(value / 1000).toFixed(1)}k`} /><YAxis type="category" dataKey="reason" width={120} tick={{ fontSize: 10, fill: '#475569' }} /><Tooltip formatter={(value: number) => formatCurrency(value)} /><Bar dataKey="totalCost" name="Perda financeira" fill="#FFBC0D" radius={[0, 5, 5, 0]} /></BarChart></ResponsiveContainer></ChartPanel><aside className="rounded-2xl border border-neutral-200/80 bg-white p-6 shadow-xs xl:col-span-2"><p className="text-xs font-bold uppercase tracking-wider text-[#C92F0A]">Impacto das perdas</p><h2 className="text-lg font-bold text-[#111111]">Resumo operacional</h2><div className="mt-4 space-y-3"><MetricRow label="Principal causa" value={topLoss ? `${topLoss.reason} · ${formatCurrency(topLoss.totalCost)}` : 'Sem dados'} tone="critical" /><MetricRow label="Setor mais impactado" value={topSector ? `${topSector.sector} · ${formatCurrency(topSector.totalCost)}` : 'Sem dados'} tone="attention" /><MetricRow label="Produto mais impactado" value={mostImpactedProduct ? `${mostImpactedProduct.name} · ${formatCurrency(mostImpactedProduct.totalLoss)}` : 'Sem dados'} tone="critical" /><MetricRow label="Semana crítica" value={criticalWeek ? `${criticalWeek.week} · ${formatCurrency(criticalWeek.totalCost)}` : 'Sem dados'} tone="attention" /></div>{topLoss && <p className="mt-4 rounded-xl bg-[#FFF0EA] p-3 text-xs leading-relaxed text-[#962006]">As três principais causas concentram {formatPercent(topThreeLossShare)} do valor perdido.</p>}</aside></section>
+
+    <section className="cockpit-priorities rounded-2xl border border-neutral-200/80 bg-white p-6 shadow-xs"><p className="text-xs font-bold uppercase tracking-wider text-[#D99000]">Resultado → risco → ação</p><h2 className="text-lg font-bold text-[#111111]">Prioridades operacionais</h2><p className="mt-1 text-xs text-neutral-500">Leitura derivada de metas, vendas, estoque, perdas e resultado. Recomendações não executam movimentações.</p><div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">{operationalPriorities.map((priority) => <OperationalPriorityCard key={`${priority.title}-${priority.cause}`} {...priority} />)}</div></section>
+  </div>;
 };
+
+function KpiCard({ label, value, description, icon: Icon, tone, className = '' }: { label: string; value: string; description: string; icon: React.ElementType; tone: 'positive' | 'critical' | 'highlight' | 'info' | 'neutral' | 'attention'; className?: string }) { const tones = { positive: 'border-[#CAE79A] bg-[#F4FAEA] text-[#314E0D]', critical: 'border-[#FFB79B] bg-[#FFF0EA] text-[#691603]', highlight: 'border-[#FFE080] bg-[#FFF8E6] text-[#5E3B00]', info: 'border-[#A7E5F2] bg-[#EAF9FD] text-[#06495E]', neutral: 'border-neutral-200 bg-white text-[#111111]', attention: 'border-[#FFEDB0] bg-[#FFF8E6] text-[#875700]' }; return <div className={`cockpit-kpi rounded-2xl border p-4 shadow-xs ${tones[tone]} ${className}`}><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wide opacity-80">{label}</span><Icon className="h-5 w-5" /></div><p className="mt-4 text-xl font-black tracking-tight">{value}</p><p className="mt-1 text-[11px] opacity-80">{description}</p></div>; }
+function ChartPanel({ eyebrow, title, description, action, onAction, children, className = '' }: { eyebrow: string; title: string; description: string; action: string; onAction: () => void; children: React.ReactNode; className?: string }) { return <div className={`cockpit-panel rounded-2xl border border-neutral-200/80 bg-white p-6 shadow-xs ${className}`}><div className="mb-4 flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-[#087B9F]">{eyebrow}</p><h2 className="text-lg font-bold text-[#111111]">{title}</h2><p className="mt-1 text-xs text-neutral-500">{description}</p></div><button onClick={onAction} className="flex shrink-0 items-center gap-1 text-xs font-semibold text-[#08627F] hover:text-[#06495E]">{action}<ChevronRight className="h-3.5 w-3.5" /></button></div><div className="h-64">{children}</div></div>; }
+function MetricRow({ label, value, tone }: { label: string; value: string; tone: 'positive' | 'critical' | 'attention' | 'info' }) { const tones = { positive: 'border-[#CAE79A] bg-[#F4FAEA] text-[#426D12]', critical: 'border-[#FFB79B] bg-[#FFF0EA] text-[#962006]', attention: 'border-[#FFEDB0] bg-[#FFF8E6] text-[#875700]', info: 'border-[#A7E5F2] bg-[#EAF9FD] text-[#06495E]' }; return <div className={`cockpit-metric-row rounded-xl border p-3 ${tones[tone]}`}><p className="text-[10px] font-bold uppercase tracking-wide opacity-80">{label}</p><p className="mt-1 text-xs font-semibold leading-relaxed text-[#111111]">{value}</p></div>; }
+const PriorityCard: React.FC<{ index: number; title: string; description: string; tone: 'critical' | 'attention' | 'info' }> = ({ index, title, description, tone }) => { const tones = { critical: 'border-[#FFB79B] bg-[#FFF0EA] text-[#962006]', attention: 'border-[#FFEDB0] bg-[#FFF8E6] text-[#875700]', info: 'border-[#A7E5F2] bg-[#EAF9FD] text-[#06495E]' }; return <article className={`rounded-xl border p-4 ${tones[tone]}`}><span className="grid h-6 w-6 place-items-center rounded-full bg-white/70 text-xs font-black">{index}</span><h3 className="mt-3 text-sm font-bold text-[#111111]">{title}</h3><p className="mt-1 text-xs leading-relaxed text-neutral-700">{description}</p></article>; };
+const OperationalPriorityCard: React.FC<{ title: string; cause: string; impact: string; action: string; tone: 'critical' | 'attention' | 'info' }> = ({ title, cause, impact, action, tone }) => { const tones = { critical: 'border-[#FFB79B] bg-[#FFF0EA] text-[#962006]', attention: 'border-[#FFEDB0] bg-[#FFF8E6] text-[#875700]', info: 'border-[#A7E5F2] bg-[#EAF9FD] text-[#06495E]' }; return <article className={`cockpit-priority-card rounded-xl border p-4 ${tones[tone]}`}><h3 className="text-sm font-bold text-[#111111]">{title}</h3><dl className="mt-3 space-y-2 text-xs leading-relaxed text-neutral-700"><div><dt className="font-bold text-neutral-900">Causa</dt><dd>{cause}</dd></div><div><dt className="font-bold text-neutral-900">Impacto</dt><dd>{impact}</dd></div><div><dt className="font-bold text-neutral-900">Ação recomendada</dt><dd>{action}</dd></div></dl></article>; };

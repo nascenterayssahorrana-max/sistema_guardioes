@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
-import { Product, NolaMovement, FixedCost, SaleRecord, SimulationParams, ProductCode, LossReason, SectorType } from '../types/finance';
-import { INITIAL_PRODUCTS, INITIAL_FIXED_COSTS, INITIAL_SALES, RAW_NOLA_MOVEMENTS } from '../data';
+import { Product, NolaMovement, FixedCost, SaleRecord, SimulationParams, ProductCode, LossReason, SectorType, SupplyItem, StockMovement, ProductIngredient, ProductSupplyRequirement, StockMovementType, CommercialGoal } from '../types/finance';
+import { INITIAL_PRODUCTS, INITIAL_FIXED_COSTS, INITIAL_SALES, RAW_NOLA_MOVEMENTS, INITIAL_SUPPLIES, INITIAL_STOCK_MOVEMENTS, INITIAL_PRODUCT_INGREDIENTS, INITIAL_COMMERCIAL_GOALS } from '../data';
+import { useAccess } from './AccessContext';
+import { buildStockIntelligence, convertStockUnit, StockIntelligenceFilters, StockIntelligenceReport } from '../utils/stockIntelligence';
+import { buildCommercialPerformance, CommercialFilters, CommercialPerformanceReport, goalScopeKey, validateCommercialGoal } from '../utils/commercialGoals';
 
 export interface ProductCalculations {
   product: Product;
@@ -28,6 +31,28 @@ export interface ParetoReasonItem {
   percentage: number;
   cumulativePercentage: number;
 }
+
+export type BreakEvenStatus = 'valid' | 'insufficient_data' | 'non_positive_mc' | 'mc_near_zero';
+
+export const getBreakEvenStatus = (
+  hasData: boolean,
+  mcRate: number,
+  averageUnitMC?: number,
+): BreakEvenStatus => {
+  if (!hasData) return 'insufficient_data';
+  if (!Number.isFinite(mcRate) || mcRate <= 0 || (averageUnitMC !== undefined && averageUnitMC <= 0)) {
+    return 'non_positive_mc';
+  }
+
+  // This is a numeric-stability guard, not a commercial margin threshold.
+  // Values at floating-point precision around zero cannot produce a reliable,
+  // interpretable break-even result, so the UI must show an attention state.
+  if (mcRate <= Number.EPSILON || (averageUnitMC !== undefined && averageUnitMC <= Number.EPSILON)) {
+    return 'mc_near_zero';
+  }
+
+  return 'valid';
+};
 
 export interface SectorLossItem {
   sector: SectorType;
@@ -75,6 +100,7 @@ interface FinanceContextType {
   weightedMCPercent: number;
   averageUnitMC: number;
   averageUnitPrice: number;
+  breakEvenStatus: BreakEvenStatus;
 
   // Break-Even Points
   pecReais: number;
@@ -99,11 +125,31 @@ interface FinanceContextType {
   simulatedDRE: DRESummary;
   simulatedPECReais: number;
   simulatedPEEReais: number;
+  simulatedBreakEvenStatus: BreakEvenStatus;
   simulatedAnnualSavings: number;
+  hasSimulationData: boolean;
+
+  supplies: SupplyItem[];
+  stockMovements: StockMovement[];
+  productIngredients: Record<ProductCode, ProductIngredient[]>;
+  lowStockSupplies: SupplyItem[];
+  zeroStockSupplies: SupplyItem[];
+  addSupply: (supply: Omit<SupplyItem, 'id'>) => string;
+  updateSupply: (id: string, updates: Partial<SupplyItem>) => void;
+  registerStockMovement: (movement: Omit<StockMovement, 'id' | 'supplyName' | 'balanceAfter'>) => { ok: boolean; message?: string };
+  setProductIngredients: (productCode: ProductCode, ingredients: ProductIngredient[]) => void;
+  getProductAvailability: (productCode: ProductCode, quantity: number) => { configured: boolean; sufficient: boolean; requirements: ProductSupplyRequirement[] };
+  getStockIntelligence: (filters?: StockIntelligenceFilters) => StockIntelligenceReport;
+  commercialGoals: CommercialGoal[];
+  getCommercialPerformance: (filters?: CommercialFilters) => CommercialPerformanceReport;
+  saveCommercialGoal: (goal: Omit<CommercialGoal, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => { ok: boolean; message?: string; id?: string };
+  deleteCommercialGoal: (id: string) => boolean;
 
   // Actions
   updateProduct: (code: ProductCode, updates: Partial<Product>) => void;
-  addSale: (sale: Omit<SaleRecord, 'id' | 'totalRevenue' | 'variableCostUnit' | 'allocatedLossUnit' | 'totalVariableCost' | 'contributionMarginTotal' | 'contributionMarginPercent'>) => void;
+  addProduct: (product: Omit<Product, 'code'>) => ProductCode;
+  deleteProduct: (code: ProductCode) => { ok: boolean; message?: string };
+  addSale: (sale: Omit<SaleRecord, 'id' | 'totalRevenue' | 'variableCostUnit' | 'allocatedLossUnit' | 'totalVariableCost' | 'contributionMarginTotal' | 'contributionMarginPercent' | 'financialSnapshotVersion' | 'taxRateApplied' | 'directCostUnit' | 'netRevenue'>) => boolean;
   deleteSale: (id: string) => void;
   addFixedCost: (cost: Omit<FixedCost, 'id'>) => void;
   updateFixedCost: (id: string, updates: Partial<FixedCost>) => void;
@@ -126,9 +172,14 @@ const STORAGE_KEYS = {
   SALES: 'guardioes_lasanha_sales_v2',
   NOLA: 'guardioes_lasanha_nola_v2',
   TARGET_PROFIT: 'guardioes_lasanha_target_profit_v2',
+  SUPPLIES: 'guardioes_lasanha_supplies_v1',
+  STOCK_MOVEMENTS: 'guardioes_lasanha_stock_movements_v1',
+  PRODUCT_INGREDIENTS: 'guardioes_lasanha_product_ingredients_v1',
+  COMMERCIAL_GOALS: 'guardioes_lasanha_commercial_goals_v1',
 };
 
 export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { can } = useAccess();
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
     return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
@@ -147,6 +198,22 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [nolaMovements, setNolaMovements] = useState<NolaMovement[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.NOLA);
     return saved ? JSON.parse(saved) : RAW_NOLA_MOVEMENTS;
+  });
+  const [supplies, setSupplies] = useState<SupplyItem[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.SUPPLIES);
+    return saved ? JSON.parse(saved) : INITIAL_SUPPLIES;
+  });
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.STOCK_MOVEMENTS);
+    return saved ? JSON.parse(saved) : INITIAL_STOCK_MOVEMENTS;
+  });
+  const [productIngredients, setProductIngredientsState] = useState<Record<ProductCode, ProductIngredient[]>>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.PRODUCT_INGREDIENTS);
+    return saved ? JSON.parse(saved) : INITIAL_PRODUCT_INGREDIENTS;
+  });
+  const [commercialGoals, setCommercialGoals] = useState<CommercialGoal[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.COMMERCIAL_GOALS);
+    return saved ? JSON.parse(saved) : INITIAL_COMMERCIAL_GOALS;
   });
 
   const [targetMonthlyProfit, setTargetMonthlyProfit] = useState<number>(() => {
@@ -180,6 +247,10 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.NOLA, JSON.stringify(nolaMovements));
   }, [nolaMovements]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.SUPPLIES, JSON.stringify(supplies)); }, [supplies]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.STOCK_MOVEMENTS, JSON.stringify(stockMovements)); }, [stockMovements]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.PRODUCT_INGREDIENTS, JSON.stringify(productIngredients)); }, [productIngredients]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.COMMERCIAL_GOALS, JSON.stringify(commercialGoals)); }, [commercialGoals]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.TARGET_PROFIT, String(targetMonthlyProfit));
@@ -188,30 +259,23 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Product Calculations with allocated NOLA losses
   const productCalculations = useMemo<Record<ProductCode, ProductCalculations>>(() => {
     // 1. Group NOLA per product
-    const stats: Record<ProductCode, { lossCost: number; producedUnits: number; discardedUnits: number }> = {
-      GL001: { lossCost: 0, producedUnits: 0, discardedUnits: 0 },
-      RI002: { lossCost: 0, producedUnits: 0, discardedUnits: 0 },
-      NS003: { lossCost: 0, producedUnits: 0, discardedUnits: 0 },
-      RC004: { lossCost: 0, producedUnits: 0, discardedUnits: 0 },
-      LT005: { lossCost: 0, producedUnits: 0, discardedUnits: 0 },
-      RG006: { lossCost: 0, producedUnits: 0, discardedUnits: 0 },
-    };
+    const stats: Record<ProductCode, { lossCost: number; producedUnits: number; discardedUnits: number }> = Object.fromEntries(
+      products.map((product) => [product.code, { lossCost: 0, producedUnits: 0, discardedUnits: 0 }]),
+    );
 
     nolaMovements.forEach((mov) => {
       const code = mov.productCode;
-      if (stats[code]) {
-        stats[code].lossCost += mov.totalLossValue;
-        stats[code].producedUnits += mov.producedUnits;
-        stats[code].discardedUnits += mov.discardedUnits;
-      }
+      if (!stats[code]) stats[code] = { lossCost: 0, producedUnits: 0, discardedUnits: 0 };
+      stats[code].lossCost += mov.totalLossValue;
+      stats[code].producedUnits += mov.producedUnits;
+      stats[code].discardedUnits += mov.discardedUnits;
     });
 
     const result: Partial<Record<ProductCode, ProductCalculations>> = {};
 
     products.forEach((prod) => {
       const pStats = stats[prod.code] || { lossCost: 0, producedUnits: 0, discardedUnits: 0 };
-      const effectiveProduced = pStats.producedUnits > 0 ? pStats.producedUnits : (prod.unitsPerBatch * 100);
-      const allocatedLossPerUnit = pStats.lossCost / effectiveProduced;
+      const allocatedLossPerUnit = pStats.producedUnits > 0 ? pStats.lossCost / pStats.producedUnits : 0;
 
       const directCostNoLoss = prod.baseCost + prod.packagingCost + prod.directLaborCost + prod.otherVariableCost;
       const realVariableCost = directCostNoLoss + allocatedLossPerUnit;
@@ -268,11 +332,15 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
     sales.forEach((s) => {
       const prodCalc = productCalculations[s.productCode];
       grossRevenue += s.totalRevenue;
-      const taxRate = s.channel === 'B2C' ? (prodCalc?.product.taxRateB2C || 7.5) : (prodCalc?.product.taxRateB2B || 5.5);
+      const taxRate = s.taxRateApplied ?? (s.channel === 'B2C' ? prodCalc?.product.taxRateB2C : prodCalc?.product.taxRateB2B) ?? (s.channel === 'B2C' ? 7.5 : 5.5);
       taxes += s.totalRevenue * (taxRate / 100);
 
-      const baseVar = (prodCalc ? (prodCalc.product.baseCost + prodCalc.product.packagingCost + prodCalc.product.directLaborCost + prodCalc.product.otherVariableCost) : s.variableCostUnit) * s.quantityUnits;
-      const lossAlloc = (prodCalc ? prodCalc.allocatedLossPerUnit : s.allocatedLossUnit) * s.quantityUnits;
+      const baseVarUnit = s.financialSnapshotVersion
+        ? s.directCostUnit ?? s.variableCostUnit
+        : (prodCalc ? (prodCalc.product.baseCost + prodCalc.product.packagingCost + prodCalc.product.directLaborCost + prodCalc.product.otherVariableCost) : s.variableCostUnit);
+      const lossAllocUnit = s.financialSnapshotVersion ? s.allocatedLossUnit : (prodCalc ? prodCalc.allocatedLossPerUnit : s.allocatedLossUnit);
+      const baseVar = baseVarUnit * s.quantityUnits;
+      const lossAlloc = lossAllocUnit * s.quantityUnits;
 
       variableCostsCPV += baseVar;
       allocatedLosses += lossAlloc;
@@ -307,8 +375,10 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       const avgMC = currentDRE.contributionMargin / totalUnits;
       const mcP = (currentDRE.contributionMargin / currentDRE.grossRevenue) * 100;
       return {
-        weightedMCPercent: Math.max(mcP, 1),
-        averageUnitMC: Math.max(avgMC, 1),
+        // The real margin is preserved here. A minimum artificial MC would make
+        // an unachievable break-even point look mathematically attainable.
+        weightedMCPercent: mcP,
+        averageUnitMC: avgMC,
         averageUnitPrice: avgPrice,
       };
     }
@@ -337,37 +407,42 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
   }, [sales, currentDRE, productCalculations]);
 
+  const breakEvenStatus = useMemo<BreakEvenStatus>(
+    () => getBreakEvenStatus(sales.length > 0 && currentDRE.grossRevenue > 0, weightedMCPercent / 100, averageUnitMC),
+    [sales.length, currentDRE.grossRevenue, weightedMCPercent, averageUnitMC],
+  );
+
   // Break-Even calculations
   const pecReais = useMemo(() => {
     const mcRate = weightedMCPercent / 100;
-    return mcRate > 0 ? totalFixedCosts / mcRate : 0;
-  }, [totalFixedCosts, weightedMCPercent]);
+    return breakEvenStatus === 'valid' ? totalFixedCosts / mcRate : 0;
+  }, [totalFixedCosts, weightedMCPercent, breakEvenStatus]);
 
   const pecUnits = useMemo(() => {
-    return averageUnitMC > 0 ? Math.ceil(totalFixedCosts / averageUnitMC) : 0;
-  }, [totalFixedCosts, averageUnitMC]);
+    return breakEvenStatus === 'valid' ? Math.ceil(totalFixedCosts / averageUnitMC) : 0;
+  }, [totalFixedCosts, averageUnitMC, breakEvenStatus]);
 
   const peeReais = useMemo(() => {
     const mcRate = weightedMCPercent / 100;
-    return mcRate > 0 ? (totalFixedCosts + targetMonthlyProfit) / mcRate : 0;
-  }, [totalFixedCosts, targetMonthlyProfit, weightedMCPercent]);
+    return breakEvenStatus === 'valid' ? (totalFixedCosts + targetMonthlyProfit) / mcRate : 0;
+  }, [totalFixedCosts, targetMonthlyProfit, weightedMCPercent, breakEvenStatus]);
 
   const peeUnits = useMemo(() => {
-    return averageUnitMC > 0 ? Math.ceil((totalFixedCosts + targetMonthlyProfit) / averageUnitMC) : 0;
-  }, [totalFixedCosts, targetMonthlyProfit, averageUnitMC]);
+    return breakEvenStatus === 'valid' ? Math.ceil((totalFixedCosts + targetMonthlyProfit) / averageUnitMC) : 0;
+  }, [totalFixedCosts, targetMonthlyProfit, averageUnitMC, breakEvenStatus]);
 
   const pefReais = useMemo(() => {
     const mcRate = weightedMCPercent / 100;
-    return mcRate > 0 ? totalDisbursableFixedCosts / mcRate : 0;
-  }, [totalDisbursableFixedCosts, weightedMCPercent]);
+    return breakEvenStatus === 'valid' ? totalDisbursableFixedCosts / mcRate : 0;
+  }, [totalDisbursableFixedCosts, weightedMCPercent, breakEvenStatus]);
 
   const pefUnits = useMemo(() => {
-    return averageUnitMC > 0 ? Math.ceil(totalDisbursableFixedCosts / averageUnitMC) : 0;
-  }, [totalDisbursableFixedCosts, averageUnitMC]);
+    return breakEvenStatus === 'valid' ? Math.ceil(totalDisbursableFixedCosts / averageUnitMC) : 0;
+  }, [totalDisbursableFixedCosts, averageUnitMC, breakEvenStatus]);
 
   const marginOfSafetyReais = useMemo(() => {
-    return currentDRE.grossRevenue - pecReais;
-  }, [currentDRE.grossRevenue, pecReais]);
+    return breakEvenStatus === 'valid' ? currentDRE.grossRevenue - pecReais : 0;
+  }, [currentDRE.grossRevenue, pecReais, breakEvenStatus]);
 
   const marginOfSafetyPercent = useMemo(() => {
     return currentDRE.grossRevenue > 0 ? (marginOfSafetyReais / currentDRE.grossRevenue) * 100 : 0;
@@ -464,8 +539,31 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   }, [nolaMovements]);
 
   // Simulation Engine (What-If Analysis)
-  const { simulatedDRE, simulatedPECReais, simulatedPEEReais, simulatedAnnualSavings } = useMemo(() => {
+  const { simulatedDRE, simulatedPECReais, simulatedPEEReais, simulatedAnnualSavings, simulatedBreakEvenStatus } = useMemo(() => {
     const { lossReductionPercent, b2cPriceChangePercent, b2bPriceChangePercent, volumeChangePercent, fixedCostChangePercent } = simulationParams;
+
+    if (sales.length === 0) {
+      const emptyDRE: DRESummary = {
+        grossRevenue: 0,
+        taxes: 0,
+        netRevenue: 0,
+        variableCostsCPV: 0,
+        allocatedLosses: 0,
+        contributionMargin: 0,
+        contributionMarginPercent: 0,
+        fixedCostsTotal: totalFixedCosts,
+        operationalProfit: -totalFixedCosts,
+        operationalProfitPercent: 0,
+      };
+
+      return {
+        simulatedDRE: emptyDRE,
+        simulatedPECReais: 0,
+        simulatedPEEReais: 0,
+        simulatedBreakEvenStatus: 'insufficient_data' as BreakEvenStatus,
+        simulatedAnnualSavings: 0,
+      };
+    }
 
     // Adjusted fixed costs
     const simFixedCost = totalFixedCosts * (1 + fixedCostChangePercent / 100);
@@ -484,25 +582,20 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       const simRev = simPrice * simUnits;
 
       const prodCalc = productCalculations[s.productCode];
-      const taxRate = s.channel === 'B2C' ? (prodCalc?.product.taxRateB2C || 7.5) : (prodCalc?.product.taxRateB2B || 5.5);
+      const taxRate = s.taxRateApplied ?? (s.channel === 'B2C' ? prodCalc?.product.taxRateB2C : prodCalc?.product.taxRateB2B) ?? (s.channel === 'B2C' ? 7.5 : 5.5);
 
       simGrossRevenue += simRev;
       simTaxes += simRev * (taxRate / 100);
 
-      const baseVarUnit = prodCalc ? (prodCalc.product.baseCost + prodCalc.product.packagingCost + prodCalc.product.directLaborCost + prodCalc.product.otherVariableCost) : s.variableCostUnit;
-      const lossAllocUnit = (prodCalc ? prodCalc.allocatedLossPerUnit : s.allocatedLossUnit) * (1 - lossReductionPercent / 100);
+      const baseVarUnit = s.financialSnapshotVersion
+        ? s.directCostUnit ?? s.variableCostUnit
+        : (prodCalc ? (prodCalc.product.baseCost + prodCalc.product.packagingCost + prodCalc.product.directLaborCost + prodCalc.product.otherVariableCost) : s.variableCostUnit);
+      const historicalLossUnit = s.financialSnapshotVersion ? s.allocatedLossUnit : (prodCalc ? prodCalc.allocatedLossPerUnit : s.allocatedLossUnit);
+      const lossAllocUnit = historicalLossUnit * (1 - lossReductionPercent / 100);
 
       simVarCPV += baseVarUnit * simUnits;
       simAllocLoss += lossAllocUnit * simUnits;
     });
-
-    // Fallback if no sales
-    if (sales.length === 0) {
-      simGrossRevenue = 100000 * (1 + volumeChangePercent / 100);
-      simTaxes = simGrossRevenue * 0.065;
-      simVarCPV = simGrossRevenue * 0.55;
-      simAllocLoss = simGrossRevenue * 0.03 * (1 - lossReductionPercent / 100);
-    }
 
     const simNetRevenue = simGrossRevenue - simTaxes;
     const simTotalVar = simVarCPV + simAllocLoss;
@@ -511,9 +604,10 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
     const simOperationalProfit = simContributionMargin - simFixedCost;
     const simOperationalProfitPercent = simGrossRevenue > 0 ? (simOperationalProfit / simGrossRevenue) * 100 : 0;
 
-    const mcRate = Math.max(simMCPercent / 100, 0.01);
-    const simPEC = simFixedCost / mcRate;
-    const simPEE = (simFixedCost + targetMonthlyProfit) / mcRate;
+    const simMCRate = simMCPercent / 100;
+    const simulatedBreakEvenStatus = getBreakEvenStatus(simGrossRevenue > 0, simMCRate);
+    const simPEC = simulatedBreakEvenStatus === 'valid' ? simFixedCost / simMCRate : 0;
+    const simPEE = simulatedBreakEvenStatus === 'valid' ? (simFixedCost + targetMonthlyProfit) / simMCRate : 0;
 
     // Annual savings based on 52 weeks projection (or loss reduction)
     // 27 weeks = totalNolaLossReais -> annual baseline = totalNolaLossReais * (52 / 27)
@@ -535,22 +629,49 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       },
       simulatedPECReais: simPEC,
       simulatedPEEReais: simPEE,
+      simulatedBreakEvenStatus,
       simulatedAnnualSavings,
     };
   }, [simulationParams, totalFixedCosts, sales, productCalculations, weightedMCPercent, targetMonthlyProfit, totalNolaLossReais]);
 
   // Actions
   const updateProduct = (code: ProductCode, updates: Partial<Product>) => {
+    if (!can('products.edit')) return;
     setProducts((prev) => prev.map((p) => (p.code === code ? { ...p, ...updates } : p)));
   };
 
-  const addSale = (newSale: Omit<SaleRecord, 'id' | 'totalRevenue' | 'variableCostUnit' | 'allocatedLossUnit' | 'totalVariableCost' | 'contributionMarginTotal' | 'contributionMarginPercent'>) => {
+  const addProduct = (product: Omit<Product, 'code'>): ProductCode => {
+    if (!can('products.edit')) return '';
+    const nextCode = `PRD${String(products.length + 1).padStart(3, '0')}`;
+    setProducts((prev) => [...prev, { ...product, code: nextCode }]);
+    return nextCode;
+  };
+
+  const deleteProduct = (code: ProductCode) => {
+    if (!can('products.edit')) return { ok: false, message: 'Seu perfil não possui permissão para excluir produtos.' };
+    if (!products.some((product) => product.code === code)) return { ok: false, message: 'Produto não encontrado.' };
+    if (sales.some((sale) => sale.productCode === code)) return { ok: false, message: 'Este produto possui vendas registradas e não pode ser excluído.' };
+    if (nolaMovements.some((movement) => movement.productCode === code)) return { ok: false, message: 'Este produto possui perdas registradas e não pode ser excluído.' };
+    if (commercialGoals.some((goal) => goal.productCode === code)) return { ok: false, message: 'Este produto possui uma meta vinculada e não pode ser excluído.' };
+
+    setProducts((prev) => prev.filter((product) => product.code !== code));
+    setProductIngredientsState((prev) => {
+      const next = { ...prev };
+      delete next[code];
+      return next;
+    });
+    return { ok: true };
+  };
+
+  const addSale = (newSale: Omit<SaleRecord, 'id' | 'totalRevenue' | 'variableCostUnit' | 'allocatedLossUnit' | 'totalVariableCost' | 'contributionMarginTotal' | 'contributionMarginPercent' | 'financialSnapshotVersion' | 'taxRateApplied' | 'directCostUnit' | 'netRevenue'>) => {
+    if (!can('sales.create')) return false;
     const prodCalc = productCalculations[newSale.productCode];
+    if (!prodCalc?.product.active) return false;
     const totalRevenue = newSale.quantityUnits * newSale.unitPrice;
-    const variableCostUnit = prodCalc ? (prodCalc.product.baseCost + prodCalc.product.packagingCost + prodCalc.product.directLaborCost + prodCalc.product.otherVariableCost) : 12.0;
-    const allocatedLossUnit = prodCalc ? prodCalc.allocatedLossPerUnit : 0.3;
+    const variableCostUnit = prodCalc.product.baseCost + prodCalc.product.packagingCost + prodCalc.product.directLaborCost + prodCalc.product.otherVariableCost;
+    const allocatedLossUnit = prodCalc.allocatedLossPerUnit;
     const totalVariableCost = (variableCostUnit + allocatedLossUnit) * newSale.quantityUnits;
-    const taxRate = newSale.channel === 'B2C' ? (prodCalc?.product.taxRateB2C || 7.5) : (prodCalc?.product.taxRateB2B || 5.5);
+    const taxRate = newSale.channel === 'B2C' ? prodCalc.product.taxRateB2C : prodCalc.product.taxRateB2B;
     const netRevenue = totalRevenue * (1 - taxRate / 100);
     const contributionMarginTotal = netRevenue - totalVariableCost;
     const contributionMarginPercent = totalRevenue > 0 ? (contributionMarginTotal / totalRevenue) * 100 : 0;
@@ -564,9 +685,14 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       totalVariableCost,
       contributionMarginTotal,
       contributionMarginPercent,
+      financialSnapshotVersion: 1,
+      taxRateApplied: taxRate,
+      directCostUnit: variableCostUnit,
+      netRevenue,
     };
 
     setSales((prev) => [record, ...prev]);
+    return true;
   };
 
   const deleteSale = (id: string) => {
@@ -574,6 +700,7 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const addFixedCost = (cost: Omit<FixedCost, 'id'>) => {
+    if (!can('fixedCosts.edit')) return;
     const record: FixedCost = {
       id: `fc-${Date.now()}`,
       ...cost,
@@ -582,14 +709,17 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const updateFixedCost = (id: string, updates: Partial<FixedCost>) => {
+    if (!can('fixedCosts.edit')) return;
     setFixedCosts((prev) => prev.map((fc) => (fc.id === id ? { ...fc, ...updates } : fc)));
   };
 
   const deleteFixedCost = (id: string) => {
+    if (!can('fixedCosts.edit')) return;
     setFixedCosts((prev) => prev.filter((fc) => fc.id !== id));
   };
 
   const addNolaMovement = (mov: Omit<NolaMovement, 'id' | 'totalLossValue'>) => {
+    if (!can('losses.create')) return;
     const totalLossValue = mov.discardedUnits * mov.unitCost;
     const record: NolaMovement = {
       id: `MOV-${Date.now().toString().slice(-5)}`,
@@ -600,14 +730,101 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const deleteNolaMovement = (id: string) => {
+    if (!can('losses.create')) return;
     setNolaMovements((prev) => prev.filter((m) => m.id !== id));
   };
+
+  const addSupply = (supply: Omit<SupplyItem, 'id'>) => {
+    if (!can('inventory.operate')) return '';
+    const id = `ins-${Date.now()}`;
+    setSupplies((prev) => [...prev, { ...supply, id }]);
+    return id;
+  };
+
+  const updateSupply = (id: string, updates: Partial<SupplyItem>) => {
+    if (!can('inventory.operate')) return;
+    setSupplies((prev) => prev.map((supply) => supply.id === id ? { ...supply, ...updates } : supply));
+  };
+
+  const registerStockMovement = (movement: Omit<StockMovement, 'id' | 'supplyName' | 'balanceAfter'>) => {
+    if (!can('inventory.operate')) return { ok: false, message: 'Seu perfil não possui permissão para movimentar estoque.' };
+    const supply = supplies.find((item) => item.id === movement.supplyId);
+    if (!supply) return { ok: false, message: 'Insumo não encontrado.' };
+    if (!Number.isFinite(movement.quantity) || movement.quantity < 0) return { ok: false, message: 'Informe uma quantidade válida e não negativa.' };
+    const newBalance = movement.type === 'entrada'
+      ? supply.currentStock + movement.quantity
+      : movement.type === 'saida'
+        ? supply.currentStock - movement.quantity
+        : movement.quantity;
+    if (newBalance < 0) return { ok: false, message: `Estoque insuficiente. Disponível: ${supply.currentStock} ${supply.unit}.` };
+    // For adjustments, quantity records the signed inventory difference; balanceAfter records the counted balance.
+    const recordedQuantity = movement.type === 'ajuste' ? newBalance - supply.currentStock : movement.quantity;
+    const record: StockMovement = {
+      ...movement,
+      id: `mov-est-${Date.now()}`,
+      supplyName: supply.name,
+      quantity: recordedQuantity,
+      balanceAfter: newBalance,
+    };
+    setSupplies((prev) => prev.map((item) => item.id === supply.id ? { ...item, currentStock: newBalance, unitCost: movement.type === 'entrada' && movement.unitCost !== undefined ? movement.unitCost : item.unitCost } : item));
+    setStockMovements((prev) => [record, ...prev]);
+    return { ok: true };
+  };
+
+  const setProductIngredients = (productCode: ProductCode, ingredients: ProductIngredient[]) => {
+    if (!can('inventory.operate')) return;
+    setProductIngredientsState((prev) => ({ ...prev, [productCode]: ingredients.filter((item) => item.supplyId && item.quantityPerUnit > 0) }));
+  };
+
+  const getProductAvailability = (productCode: ProductCode, quantity: number) => {
+    const ingredients = productIngredients[productCode] ?? [];
+    if (ingredients.length === 0) return { configured: false, sufficient: true, requirements: [] };
+    const requirements = ingredients.map((ingredient) => {
+      const supply = supplies.find((item) => item.id === ingredient.supplyId);
+      const converted = supply ? convertStockUnit(ingredient.quantityPerUnit, ingredient.unit ?? supply.unit, supply.unit) : undefined;
+      const required = converted === undefined ? Number.POSITIVE_INFINITY : converted * Math.max(0, quantity);
+      const available = supply?.currentStock ?? 0;
+      return { supplyId: ingredient.supplyId, supplyName: supply?.name ?? 'Insumo removido', unit: supply?.unit ?? 'unidade', available, required, deficit: Math.max(0, required - available), sufficient: available >= required, compatible: converted !== undefined };
+    });
+    return { configured: true, sufficient: requirements.every((item) => item.sufficient), requirements };
+  };
+
+  const getStockIntelligence = (filters: StockIntelligenceFilters = {}) => buildStockIntelligence({ supplies, products, sales, productIngredients, filters });
+  const getCommercialPerformance = (filters: CommercialFilters = {}) => buildCommercialPerformance({ goals: commercialGoals, sales, products, filters });
+
+  const saveCommercialGoal = (goal: Omit<CommercialGoal, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => {
+    if (!can('commercialGoals.manage')) return { ok: false, message: 'Seu perfil não possui permissão para configurar metas.' };
+    const error = validateCommercialGoal(goal);
+    if (error) return { ok: false, message: error };
+    const duplicate = commercialGoals.some((item) => item.id !== goal.id && goalScopeKey(item) === goalScopeKey(goal));
+    if (duplicate) return { ok: false, message: 'Já existe uma meta para este mesmo período e recorte. Edite a meta existente.' };
+    const now = new Date().toISOString(); const id = goal.id ?? `meta-com-${Date.now()}`;
+    setCommercialGoals((prev) => {
+      const existing = prev.find((item) => item.id === id);
+      const record: CommercialGoal = { ...goal, id, createdAt: existing?.createdAt ?? now, updatedAt: now };
+      return existing ? prev.map((item) => item.id === id ? record : item) : [record, ...prev];
+    });
+    return { ok: true, id };
+  };
+
+  const deleteCommercialGoal = (id: string) => {
+    if (!can('commercialGoals.manage') || !commercialGoals.some((item) => item.id === id)) return false;
+    setCommercialGoals((prev) => prev.filter((item) => item.id !== id));
+    return true;
+  };
+
+  const zeroStockSupplies = useMemo(() => supplies.filter((item) => item.currentStock === 0), [supplies]);
+  const lowStockSupplies = useMemo(() => supplies.filter((item) => item.currentStock > 0 && item.currentStock <= item.minimumStock), [supplies]);
 
   const resetToDefaults = () => {
     setProducts(INITIAL_PRODUCTS);
     setFixedCosts(INITIAL_FIXED_COSTS);
     setSales(INITIAL_SALES);
     setNolaMovements(RAW_NOLA_MOVEMENTS);
+    setSupplies(INITIAL_SUPPLIES);
+    setStockMovements(INITIAL_STOCK_MOVEMENTS);
+    setProductIngredientsState(INITIAL_PRODUCT_INGREDIENTS);
+    setCommercialGoals(INITIAL_COMMERCIAL_GOALS);
     setTargetMonthlyProfit(20000);
     setWorkingDaysMonth(22);
     setSimulationParams({
@@ -622,6 +839,10 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
     localStorage.removeItem(STORAGE_KEYS.SALES);
     localStorage.removeItem(STORAGE_KEYS.NOLA);
     localStorage.removeItem(STORAGE_KEYS.TARGET_PROFIT);
+    localStorage.removeItem(STORAGE_KEYS.SUPPLIES);
+    localStorage.removeItem(STORAGE_KEYS.STOCK_MOVEMENTS);
+    localStorage.removeItem(STORAGE_KEYS.PRODUCT_INGREDIENTS);
+    localStorage.removeItem(STORAGE_KEYS.COMMERCIAL_GOALS);
   };
 
   const exportDataJSON = (): string => {
@@ -634,6 +855,10 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       nolaMovements,
       targetMonthlyProfit,
       workingDaysMonth,
+      supplies,
+      stockMovements,
+      productIngredients,
+      commercialGoals,
     };
     return JSON.stringify(backup, null, 2);
   };
@@ -648,6 +873,10 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
         setNolaMovements(parsed.nolaMovements);
         if (parsed.targetMonthlyProfit) setTargetMonthlyProfit(parsed.targetMonthlyProfit);
         if (parsed.workingDaysMonth) setWorkingDaysMonth(parsed.workingDaysMonth);
+        if (parsed.supplies) setSupplies(parsed.supplies);
+        if (parsed.stockMovements) setStockMovements(parsed.stockMovements);
+        if (parsed.productIngredients) setProductIngredientsState(parsed.productIngredients);
+        if (Array.isArray(parsed.commercialGoals)) setCommercialGoals(parsed.commercialGoals);
         return true;
       }
       return false;
@@ -673,6 +902,7 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
         weightedMCPercent,
         averageUnitMC,
         averageUnitPrice,
+        breakEvenStatus,
         pecReais,
         pecUnits,
         peeReais,
@@ -691,8 +921,27 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
         simulatedDRE,
         simulatedPECReais,
         simulatedPEEReais,
+        simulatedBreakEvenStatus,
         simulatedAnnualSavings,
+        hasSimulationData: sales.length > 0,
+        supplies,
+        stockMovements,
+        productIngredients,
+        lowStockSupplies,
+        zeroStockSupplies,
+        addSupply,
+        updateSupply,
+        registerStockMovement,
+        setProductIngredients,
+        getProductAvailability,
+        getStockIntelligence,
+        commercialGoals,
+        getCommercialPerformance,
+        saveCommercialGoal,
+        deleteCommercialGoal,
         updateProduct,
+        addProduct,
+        deleteProduct,
         addSale,
         deleteSale,
         addFixedCost,

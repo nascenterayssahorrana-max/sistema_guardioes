@@ -51,7 +51,7 @@ export const INITIAL_FIXED_COSTS: FixedCost[] = [
   },
   {
     id: 'fc-7',
-    name: 'Software ERP, NOLA & Licenças de Nuvem',
+    name: 'Software ERP e Licenças de Nuvem',
     category: 'Tecnologia & Sistemas',
     monthlyAmount: 650.0,
     isDisbursable: true,

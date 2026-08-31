@@ -11,8 +11,8 @@ export const FINANCIAL_GLOSSARY: GlossaryItem[] = [
   {
     term: 'Margem de Contribuição (MC)',
     category: 'Conceito Fundamental',
-    definition: 'É a quantia que sobra do preço de venda após a dedução dos impostos e de todos os custos variáveis reais (incluindo o refugo de produção NOLA). Essa sobra é o que efetivamente "contribui" para pagar os custos fixos da fábrica e formar o lucro líquido.',
-    formula: 'Margem de Contribuição (R$) = Preço Líquido - (Insumos + Embalagem + MOD + Outros Variáveis + Perda NOLA Rateada)',
+    definition: 'É a quantia que sobra do preço de venda após a dedução dos impostos e de todos os custos variáveis reais, incluindo o refugo de produção. Essa sobra é o que efetivamente "contribui" para pagar os custos fixos da fábrica e formar o lucro líquido.',
+    formula: 'Margem de Contribuição (R$) = Preço Líquido - (Insumos + Embalagem + MOD + Outros Variáveis + Perda Rateada)',
     practicalExample: 'Se a Lasanha da Galáxia é vendida no B2C a R$ 28,90 com impostos de 7,5% (R$ 2,17) e custo variável real de R$ 14,35 (incluindo R$ 0,38 de perdas), sua MC unitária é de R$ 12,38 (42,8% da receita bruta).',
   },
   {
@@ -44,10 +44,10 @@ export const FINANCIAL_GLOSSARY: GlossaryItem[] = [
     practicalExample: 'Se a fábrica fatura R$ 125.000 e o PEC é de R$ 97.922, a MS é de R$ 27.078 (21,7% de folga antes do prejuízo).',
   },
   {
-    term: 'Alocação de Perdas NOLA ao CPV',
+    term: 'Alocação de Perdas ao CPV',
     category: 'Engenharia de Custos',
     definition: 'No modelo de custeio industrial da consultoria, o prejuízo financeiro causado pelo refugo do chão de fábrica não é varrido para debaixo do tapete: ele é rateado e adicionado diretamente ao custo unitário de cada massa produzida.',
-    formula: 'Perda NOLA Unitária = Custo Total de Descarte do Produto (R$) ÷ Unidades Produzidas do Período',
+    formula: 'Perda Unitária = Custo Total de Descarte do Produto (R$) ÷ Unidades Produzidas do Período',
     practicalExample: 'A Lasanha Titã descartou R$ 1.840 em 27 semanas sobre 4.400 unidades produzidas, adicionando R$ 0,42 ao custo real de cada embalagem.',
   },
   {
@@ -91,7 +91,7 @@ export const INDUSTRIAL_RECOMMENDATIONS: IndustrialRecommendation[] = [
   },
   {
     id: 'REC-04',
-    title: 'Painel Visual de Apontamento NOLA no Chão de Fábrica',
+    title: 'Painel Visual de Apontamento no Chão de Fábrica',
     description: 'Disponibilizar o registro instantâneo de refugo ao final de cada batelada para que a equipe de produção visualize o custo em reais do desperdício gerado.',
     timeframe: 'Médio Prazo (45 dias)',
     potentialImpact: 'Engajamento e redução de 50% no refugo anual',

@@ -1,4 +1,4 @@
-export type ProductCode = 'GL001' | 'RI002' | 'NS003' | 'RC004' | 'LT005' | 'RG006';
+export type ProductCode = string;
 
 export interface Product {
   code: ProductCode;
@@ -18,6 +18,8 @@ export interface Product {
   description: string;
   weightGrams: number;
   category?: string;
+  targetMarginB2C?: number; // Parâmetro desejado que calcula o preço B2C; não altera vendas já realizadas.
+  targetMarginB2B?: number; // Parâmetro desejado que calcula o preço B2B; não altera vendas já realizadas.
 }
 
 export type SectorType =
@@ -99,6 +101,19 @@ export interface FixedCost {
 
 export type SalesChannel = 'B2C' | 'B2B';
 
+/** Meta gerencial independente dos lançamentos e snapshots de venda. */
+export interface CommercialGoal {
+  id: string;
+  startDate: string;
+  endDate: string;
+  channel?: SalesChannel;
+  productCode?: ProductCode;
+  revenueTarget: number;
+  unitTarget: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SaleRecord {
   id: string;
   date: string;
@@ -114,6 +129,11 @@ export interface SaleRecord {
   totalVariableCost: number;
   contributionMarginTotal: number;
   contributionMarginPercent: number;
+  /** Financial snapshot used for sales recorded after the stability phase. */
+  financialSnapshotVersion?: 1;
+  taxRateApplied?: number;
+  directCostUnit?: number;
+  netRevenue?: number;
   customerName?: string;
   clientName?: string;
 }
@@ -124,4 +144,50 @@ export interface SimulationParams {
   b2bPriceChangePercent: number; // -30% to +50%
   volumeChangePercent: number; // -50% to +100%
   fixedCostChangePercent: number; // -30% to +50%
+}
+
+export type StockUnit = 'kg' | 'g' | 'L' | 'ml' | 'unidade' | 'pacote' | 'caixa';
+export type StockMovementType = 'entrada' | 'saida' | 'ajuste';
+export type StockExitReason = 'consumo na produção' | 'perda' | 'ajuste' | 'outro';
+
+export interface SupplyItem {
+  id: string;
+  name: string;
+  category: string;
+  unit: StockUnit;
+  currentStock: number;
+  minimumStock: number;
+  unitCost: number;
+  active: boolean;
+}
+
+export interface StockMovement {
+  id: string;
+  supplyId: string;
+  supplyName: string;
+  type: StockMovementType;
+  quantity: number;
+  balanceAfter: number;
+  unitCost?: number;
+  date: string;
+  reason: string;
+  observation?: string;
+}
+
+export interface ProductIngredient {
+  supplyId: string;
+  quantityPerUnit: number;
+  /** Unidade da ficha técnica. Registros legados usam a unidade do insumo. */
+  unit?: StockUnit;
+}
+
+export interface ProductSupplyRequirement {
+  supplyId: string;
+  supplyName: string;
+  unit: StockUnit;
+  available: number;
+  required: number;
+  deficit: number;
+  sufficient: boolean;
+  compatible?: boolean;
 }
